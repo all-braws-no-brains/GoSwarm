@@ -11,6 +11,7 @@ type peer struct {
 	address  string
 	lastSeen time.Time
 	port     int
+	stats    *PeerStats
 }
 
 // Peer (public) is the exported struct for returning peer data safely
@@ -23,14 +24,16 @@ type Peer struct {
 
 // PeerStore manages a list pf discoverd peers securely
 type PeerStore struct {
-	mu    sync.RWMutex
-	peers map[string]*peer
+	mu      sync.RWMutex
+	peers   map[string]*peer
+	penalty time.Duration
 }
 
 // NewPeerStore initializes and returns a secure PeerStore
-func NewPeerStore() *PeerStore {
+func NewPeerStore(penalty time.Duration) *PeerStore {
 	return &PeerStore{
-		peers: make(map[string]*peer),
+		peers:   make(map[string]*peer),
+		penalty: penalty,
 	}
 }
 
@@ -41,12 +44,14 @@ func (ps *PeerStore) AddPeer(id, address string, port int) {
 
 	if p, exists := ps.peers[id]; exists {
 		p.lastSeen = time.Now()
+		p.updateStats(ps.penalty)
 	} else {
 		ps.peers[id] = &peer{
 			id:       id,
 			address:  address,
 			lastSeen: time.Now(),
 			port:     port,
+			stats:    NewPeerStats(),
 		}
 	}
 }
@@ -74,8 +79,67 @@ func (ps *PeerStore) Cleanup(expiry time.Duration) {
 
 	now := time.Now()
 	for id, p := range ps.peers {
+		p.updateStats(ps.penalty)
+
 		if now.Sub(p.lastSeen) > expiry {
 			delete(ps.peers, id)
 		}
 	}
+}
+
+// updateStats updates stability scores for the peer
+func (p *peer) updateStats(penalty time.Duration) {
+	p.stats.computeStability(penalty)
+}
+
+// PeerStats stores stability information for a peer
+type PeerStats struct {
+	lastSeen       time.Time
+	firstSeen      time.Time
+	uptime         time.Duration
+	dropCount      int
+	stabilityScore float64
+	// responseTime   time.Duration
+}
+
+// NewPeerStats initializes a new PeerStats entry
+func NewPeerStats() *PeerStats {
+	now := time.Now()
+	return &PeerStats{
+		lastSeen:  now,
+		firstSeen: now,
+		uptime:    0,
+		dropCount: 0,
+	}
+}
+
+// IsInactive checks if a peer has been inactive for too long
+func (p *PeerStats) IsInactive(threshold time.Duration) bool {
+	return time.Since(p.lastSeen) > threshold
+}
+
+// IncrementDropCount increases the drop count when a peer disappears
+func (p *PeerStats) IncrementDropCount() {
+	p.dropCount++
+}
+
+// computeStability will formulate and compute the reliability of a peer
+func (ps *PeerStats) computeStability(penalty time.Duration) {
+	ps.uptime = time.Since(ps.firstSeen)
+	ps.stabilityScore = calculateStabilityScore(ps.uptime, penalty, ps.dropCount)
+}
+
+// Getters to allow controlled access
+func (p *PeerStats) LastSeen() time.Time     { return p.lastSeen }
+func (p *PeerStats) Uptime() time.Duration   { return p.uptime }
+func (p *PeerStats) StabilityScore() float64 { return p.stabilityScore }
+func (p *PeerStats) DropCount() int          { return p.dropCount }
+
+func calculateStabilityScore(uptime, penalty time.Duration, dropCount int) float64 {
+	total := uptime + (time.Duration(dropCount) * penalty)
+
+	if total == 0 {
+		return 1
+	}
+	return float64(uptime) / float64(total)
 }
