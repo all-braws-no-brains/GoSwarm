@@ -22,7 +22,7 @@ type Peer struct {
 	Port     int
 }
 
-// PeerStore manages a list pf discoverd peers securely
+// PeerStore manages a list of discoverd peers securely
 type PeerStore struct {
 	mu      sync.RWMutex
 	peers   map[string]*peer
@@ -44,6 +44,7 @@ func (ps *PeerStore) AddPeer(id, address string, port int) {
 
 	if p, exists := ps.peers[id]; exists {
 		p.lastSeen = time.Now()
+		p.stats.lastSeen = time.Now()
 		p.updateStats(ps.penalty)
 	} else {
 		ps.peers[id] = &peer{
@@ -82,7 +83,7 @@ func (ps *PeerStore) Cleanup(expiry time.Duration) {
 		p.updateStats(ps.penalty)
 
 		if now.Sub(p.lastSeen) > expiry {
-			p.stats.dropCount++
+			p.stats.IncrementDropCount()
 			delete(ps.peers, id)
 		}
 	}
@@ -126,6 +127,7 @@ func (p *PeerStats) IncrementDropCount() {
 
 // computeStability will formulate and compute the reliability of a peer
 func (ps *PeerStats) computeStability(penalty time.Duration) {
+	ps.lastSeen = time.Now()
 	ps.uptime = time.Since(ps.firstSeen)
 	ps.stabilityScore = calculateStabilityScore(ps.uptime, penalty, ps.dropCount)
 }
