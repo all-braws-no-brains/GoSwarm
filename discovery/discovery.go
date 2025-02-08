@@ -1,20 +1,74 @@
 package discovery
 
 import (
+	"log"
 	"time"
 )
 
 // PeerTracker manages discovered peers and their stability stats
 type PeerTracker struct {
-	peerStore *PeerStore
-	stopChan  chan struct{}
+	peerStore    *PeerStore
+	peerStorage  *PeerStorage
+	stopChan     chan struct{}
+	dumpInterval time.Duration
 }
 
 // NewPeerTracker initializes a peer tracker
-func NewPeerTracker(peerStore *PeerStore) *PeerTracker {
-	return &PeerTracker{
-		peerStore: peerStore,
-		stopChan:  make(chan struct{}),
+func NewPeerTracker(peerStore *PeerStore, dbFile string, dumpInterval time.Duration) (*PeerTracker, error) {
+	peerStorage, err := NewPeerStorage(dbFile)
+	if err != nil {
+		return nil, err
+	}
+
+	tracker := &PeerTracker{
+		peerStore:    peerStore,
+		peerStorage:  peerStorage,
+		stopChan:     make(chan struct{}),
+		dumpInterval: dumpInterval,
+	}
+
+	// load strored peers into memory
+	peers, err := peerStorage.GetAllPeers()
+	if err != nil {
+		log.Println("Failed to load peers from storage: ", err)
+	}
+
+	peerStore.mu.Lock()
+	for _, p := range peers {
+		peerStore.peers[p.id] = p
+	}
+	peerStore.mu.Unlock()
+
+	tracker.startPeriodicDump()
+	return tracker, nil
+}
+
+func (pt *PeerTracker) startPeriodicDump() {
+	go func() {
+		ticker := time.NewTicker(pt.dumpInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				pt.dumpPeersToDB()
+			case <-pt.stopChan:
+				pt.dumpPeersToDB()
+				return
+			}
+		}
+	}()
+}
+
+// dumpPeersToDB saves all in-memory peers to BoltDB
+func (pt *PeerTracker) dumpPeersToDB() {
+	pt.peerStore.mu.RLock()
+	defer pt.peerStore.mu.RUnlock()
+
+	for _, p := range pt.peerStore.peers {
+		if err := pt.peerStorage.SavePeer(p); err != nil {
+			log.Println("Failed to save peer:", err)
+		}
 	}
 }
 
@@ -35,6 +89,10 @@ func (pt *PeerTracker) UpdatePeer(id, address string, port int) {
 			stats:    NewPeerStats(),
 			port:     port,
 		}
+	}
+
+	if err := pt.peerStorage.SavePeer(pt.peerStore.peers[id]); err != nil {
+		log.Println("Failed to persist peer update: ", err)
 	}
 }
 
@@ -69,6 +127,10 @@ func (pt *PeerTracker) cleanupPeers(threshold time.Duration) {
 		if peer.stats.IsInactive(threshold) {
 			peer.stats.IncrementDropCount()
 			delete(pt.peerStore.peers, id)
+
+			if err := pt.peerStorage.DeletePeer(id); err != nil {
+				log.Println("Failed to delete peer from storage bucket: ", err)
+			}
 		}
 	}
 }
@@ -76,4 +138,10 @@ func (pt *PeerTracker) cleanupPeers(threshold time.Duration) {
 // StopCleanup stops the background cleanup process
 func (pt *PeerTracker) StopCleanup() {
 	close(pt.stopChan)
+}
+
+// Close ensures final data persistence
+func (pt *PeerTracker) Close() {
+	pt.dumpPeersToDB()
+	pt.peerStorage.Close()
 }
