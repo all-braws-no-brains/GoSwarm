@@ -1,14 +1,12 @@
 package discovery
 
 import (
-	"sync"
 	"time"
 )
 
 // PeerTracker manages discovered peers and their stability stats
 type PeerTracker struct {
 	peerStore *PeerStore
-	mu        sync.Mutex
 	stopChan  chan struct{}
 }
 
@@ -21,21 +19,21 @@ func NewPeerTracker(peerStore *PeerStore) *PeerTracker {
 }
 
 // UpdatePeer updates a peer's uptime and last seen time
-func (pt *PeerTracker) UpdatePeer(id string) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
+func (pt *PeerTracker) UpdatePeer(id, address string, port int) {
 	pt.peerStore.mu.Lock()
 	defer pt.peerStore.mu.Unlock()
 
 	if p, exists := pt.peerStore.peers[id]; exists {
 		p.lastSeen = time.Now()
+		p.stats.lastSeen = time.Now()
 		p.updateStats(pt.peerStore.penalty)
 	} else {
 		pt.peerStore.peers[id] = &peer{
 			id:       id,
+			address:  address,
 			lastSeen: time.Now(),
 			stats:    NewPeerStats(),
+			port:     port,
 		}
 	}
 }
@@ -49,7 +47,12 @@ func (pt *PeerTracker) StartCleanup(threshold time.Duration, interval time.Durat
 		for {
 			select {
 			case <-ticker.C:
-				pt.cleanupPeers(threshold)
+				select {
+				case <-pt.stopChan:
+					return
+				default:
+					pt.cleanupPeers(threshold)
+				}
 			case <-pt.stopChan:
 				return
 			}
@@ -59,9 +62,6 @@ func (pt *PeerTracker) StartCleanup(threshold time.Duration, interval time.Durat
 
 // cleanupPeers removes peers that have been inactive for too long
 func (pt *PeerTracker) cleanupPeers(threshold time.Duration) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
 	pt.peerStore.mu.Lock()
 	defer pt.peerStore.mu.Unlock()
 

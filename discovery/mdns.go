@@ -20,13 +20,13 @@ type mDNSService struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
+	once    sync.Once
 }
 
 // NewMDNSService creates a new mDNS service instance
 func NewMDNSService(serviceName string) *mDNSService {
 	return &mDNSService{
 		serviceName: serviceName,
-		entries:     make(chan *zeroconf.ServiceEntry),
 	}
 }
 
@@ -87,8 +87,15 @@ func (m *mDNSService) StopDiscovery() {
 
 	if m.cancel != nil {
 		m.cancel()
+		m.cancel = nil
 	}
-	close(m.entries)
+
+	m.once.Do(func() {
+		if m.entries != nil {
+			close(m.entries)
+			m.entries = nil
+		}
+	})
 
 	m.running = false
 	log.Println("[mDNS] Discovery stopped")
@@ -105,6 +112,7 @@ func (m *mDNSService) PauseDiscovery() {
 
 	if m.cancel != nil {
 		m.cancel()
+		m.cancel = nil
 	}
 	m.running = false
 	log.Println("[mDNS] Discovery paused")
@@ -123,6 +131,9 @@ func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 		log.Fatalf("[mDNS] Failed to initialize resolver: %v", err)
 	}
 	m.resolver = resolver
+
+	// initializing channel only when discovery starts
+	m.entries = make(chan *zeroconf.ServiceEntry)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
