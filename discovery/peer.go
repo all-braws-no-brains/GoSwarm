@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -12,6 +13,45 @@ type peer struct {
 	lastSeen time.Time
 	port     int
 	stats    *PeerStats
+}
+
+func (p *peer) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID       string    `json:"id"`
+		Address  string    `json:"address"`
+		LastSeen time.Time `json:"last_seen"`
+		Port     int       `json:"port"`
+		Stats    PeerStats `json:"stats"`
+	}{
+		ID:       p.id,
+		Address:  p.address,
+		LastSeen: p.lastSeen,
+		Port:     p.port,
+		Stats:    *p.stats,
+	})
+}
+
+// UnmarshalJSON implements custom JSON deserialization for peer.
+func (p *peer) UnmarshalJSON(data []byte) error {
+	aux := struct {
+		ID       string     `json:"id"`
+		Address  string     `json:"address"`
+		LastSeen time.Time  `json:"last_seen"`
+		Port     int        `json:"port"`
+		Stats    *PeerStats `json:"stats"`
+	}{}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	p.id = aux.ID
+	p.address = aux.Address
+	p.lastSeen = aux.LastSeen
+	p.port = aux.Port
+	p.stats = aux.Stats
+
+	return nil
 }
 
 // Peer (public) is the exported struct for returning peer data safely
