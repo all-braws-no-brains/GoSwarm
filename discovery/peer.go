@@ -82,6 +82,7 @@ func (ps *PeerStore) Cleanup(expiry time.Duration) {
 		p.updateStats(ps.penalty)
 
 		if now.Sub(p.lastSeen) > expiry {
+			p.stats.dropCount++
 			delete(ps.peers, id)
 		}
 	}
