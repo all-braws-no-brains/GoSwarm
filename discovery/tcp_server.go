@@ -1,4 +1,4 @@
-package communication
+package discovery
 
 import (
 	"log"
@@ -8,19 +8,19 @@ import (
 
 // TCPServer represents a TCP server for peer connection
 type TCPServer struct {
-	address   string
-	listener  net.Listener
-	clients   map[string]net.Conn
-	mu        sync.Mutex
-	onMessage func(conn net.Conn, message []byte)
+	address  string
+	listener net.Listener
+	clients  map[string]net.Conn
+	mu       sync.Mutex
+	router   *MessageRouter
 }
 
 // NewTCPServer creates a new TCP server instance
-func NewTCPServer(address string, onMessage func(conn net.Conn, message []byte)) *TCPServer {
+func NewTCPServer(address string, router *MessageRouter) *TCPServer {
 	return &TCPServer{
-		address:   address,
-		clients:   map[string]net.Conn{},
-		onMessage: onMessage,
+		address: address,
+		clients: map[string]net.Conn{},
+		router:  router,
 	}
 }
 
@@ -66,9 +66,12 @@ func (s *TCPServer) handleClient(conn net.Conn) {
 			return
 		}
 
-		if s.onMessage != nil {
-			s.onMessage(conn, buffer[:n])
-		}
+		peerId := conn.RemoteAddr().String()
+		message := string(buffer[:n])
+
+		response := s.router.HandleMessage(peerId, message)
+
+		conn.Write([]byte(response))
 	}
 }
 
