@@ -115,17 +115,24 @@ func (ps *PeerStore) GetPeers() []Peer {
 
 // Cleanup removes peers that have been inactive beyond a certain threshold.
 func (ps *PeerStore) Cleanup(expiry time.Duration) {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-
 	now := time.Now()
+	var toDelete []string
+
+	ps.mu.RLock()
 	for id, p := range ps.peers {
-		p.updateStats(ps.penalty)
 
 		if now.Sub(p.lastSeen) > expiry {
-			p.stats.IncrementDropCount()
+			toDelete = append(toDelete, id)
+		}
+	}
+	ps.mu.RUnlock()
+
+	if len(toDelete) > 0 {
+		ps.mu.Lock()
+		for _, id := range toDelete {
 			delete(ps.peers, id)
 		}
+		ps.mu.Unlock()
 	}
 }
 

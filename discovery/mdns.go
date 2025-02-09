@@ -120,9 +120,9 @@ func (m *mDNSService) PauseDiscovery() {
 
 func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.running {
+		m.mu.Unlock()
 		return fmt.Errorf("discovery already running")
 	}
 
@@ -138,6 +138,7 @@ func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.running = true
+	m.mu.Unlock()
 
 	// routine to continuously discover peers
 	go func() {
@@ -154,7 +155,7 @@ func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 	go func() {
 		err = resolver.Browse(ctx, m.serviceName, "local", m.entries)
 		if err != nil {
-			log.Fatalf("[mDNS] Failed to browse: %v", err)
+			log.Println("[mDNS] Failed to browse: ", err)
 		}
 	}()
 
@@ -164,17 +165,27 @@ func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 
 // getLocalIP retrieves the local machine's IP address
 func getLocalIP() (string, error) {
-	addrs, err := net.InterfaceAddrs()
+	interfaces, err := net.Interfaces()
 	if err != nil {
-		return "", err
+		return "", nil
 	}
 
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
-			if ipNet.IP.To4() != nil {
-				return ipNet.IP.String(), nil
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue // Skip down interfaces and loopbacks
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return "", err
+		}
+
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+				return ipNet.IP.String(), nil // return the first valid IP found
 			}
 		}
 	}
+
 	return "", fmt.Errorf("no valid local IP found")
 }

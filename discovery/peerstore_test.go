@@ -1,17 +1,15 @@
-package tests
+package discovery
 
 import (
 	"fmt"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/all-braws-no-brains/GoSwarm/discovery"
 )
 
 func TestNewPeerStore(t *testing.T) {
 	penalty := 10 * time.Second
-	ps := discovery.NewPeerStore(penalty)
+	ps := NewPeerStore(penalty)
 
 	if ps == nil {
 		t.Fatal("Expected PeerStore to be intialized, got nil")
@@ -23,7 +21,7 @@ func TestNewPeerStore(t *testing.T) {
 }
 
 func TestAddPeer(t *testing.T) {
-	ps := discovery.NewPeerStore(10 * time.Second)
+	ps := NewPeerStore(10 * time.Second)
 
 	ps.AddPeer("peer_1", "192.168.1.1", 8080)
 	ps.AddPeer("peer_2", "192.168.1.2", 9090)
@@ -35,7 +33,7 @@ func TestAddPeer(t *testing.T) {
 }
 
 func TestAddPeerConcurrent(t *testing.T) {
-	ps := discovery.NewPeerStore(10 * time.Second)
+	ps := NewPeerStore(10 * time.Second)
 
 	var wg sync.WaitGroup
 	peerCount := 1000
@@ -57,7 +55,7 @@ func TestAddPeerConcurrent(t *testing.T) {
 }
 
 func TestUpdatePeer(t *testing.T) {
-	ps := discovery.NewPeerStore(10 * time.Second)
+	ps := NewPeerStore(10 * time.Second)
 
 	ps.AddPeer("peer_1", "192.168.1.1", 8080)
 	time.Sleep(50 * time.Millisecond)
@@ -74,7 +72,7 @@ func TestUpdatePeer(t *testing.T) {
 }
 
 func TestCleanupPeers(t *testing.T) {
-	ps := discovery.NewPeerStore(100 * time.Millisecond)
+	ps := NewPeerStore(100 * time.Millisecond)
 
 	ps.AddPeer("peer_1", "192.168.1.1", 8080)
 	ps.AddPeer("peer_2", "192.168.1.2", 9090)
@@ -89,7 +87,7 @@ func TestCleanupPeers(t *testing.T) {
 }
 
 func TestCleanupConcurrently(t *testing.T) {
-	ps := discovery.NewPeerStore(100 * time.Millisecond)
+	ps := NewPeerStore(100 * time.Millisecond)
 
 	var wg sync.WaitGroup
 	stopChan := make(chan struct{})
