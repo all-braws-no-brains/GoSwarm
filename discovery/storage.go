@@ -42,6 +42,7 @@ func (ps *PeerStorage) SavePeer(peer *peer) error {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
+	peer.lastSeen = time.Now()
 	data, err := peer.MarshalJSON()
 	if err != nil {
 		return err
@@ -132,5 +133,28 @@ func (ps *PeerStorage) Close() {
 			}
 			ps.db = nil
 		}
+	})
+}
+
+// CleanupPeers removes peers that haven't been seen for a set duration
+func (ps *PeerStorage) CleanupPeers(expiryTime time.Duration) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	return ps.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte(peerBucket))
+		if bucket == nil {
+			return errors.New("peer storage bucket not found")
+		}
+		return bucket.ForEach(func(k, v []byte) error {
+			var p peer
+			if err := p.UnmarshalJSON(v); err != nil {
+				return err
+			}
+			if time.Since(p.lastSeen) > expiryTime {
+				return bucket.Delete(k)
+			}
+			return nil
+		})
 	})
 }
