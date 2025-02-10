@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"encoding/json"
 	"log"
 	"net"
 	"sync"
@@ -31,47 +32,68 @@ func (s *TCPServer) Start() error {
 		return err
 	}
 	s.listener = listener
+	log.Println("[TCP] Server started on ", s.address)
 
-	log.Println("TCP server started on ", s.address)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Println("Error accepting connection: ", err)
-			continue
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				if opErr, ok := err.(*net.OpError); ok && opErr.Op == "accept" {
+					log.Println("[TCP] Server shutting down")
+					return
+				}
+				log.Println("[TCP] Error accepting connection: ", err)
+				continue
+			}
+			go s.handleClient(conn)
 		}
-
-		s.mu.Lock()
-		s.clients[conn.RemoteAddr().String()] = conn
-		s.mu.Unlock()
-
-		go s.handleClient(conn)
-	}
+	}()
+	return nil
 }
 
 // handleClient reads messages from a client and calls the user defined handler
 func (s *TCPServer) handleClient(conn net.Conn) {
 	defer func() {
-		s.mu.Lock()
-		delete(s.clients, conn.RemoteAddr().String())
-		s.mu.Unlock()
+		s.removeClient(conn)
 		conn.Close()
 	}()
 
-	buffer := make([]byte, 1024)
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	peerId := conn.RemoteAddr().String() // Use connection address as ID
+
+	s.mu.Lock()
+	s.clients[peerId] = conn
+	s.mu.Unlock()
+
 	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			log.Println("Client disconnected: ", conn.RemoteAddr().String())
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			log.Println("[TCP] Error decoding message from peer ", peerId, " : ", err)
 			return
 		}
 
-		peerId := conn.RemoteAddr().String()
-		message := string(buffer[:n])
+		response := s.router.HandleMessage(peerId, msg)
 
-		response := s.router.HandleMessage(peerId, message)
+		if err := encoder.Encode(response); err != nil {
+			log.Println("[TCP] Error encoding response to peer ", peerId, " : ", err)
+			return
+		}
+	}
+}
 
-		conn.Write([]byte(response))
+// removeClient safely removes a client connection
+func (s *TCPServer) removeClient(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, c := range s.clients {
+		if c == conn {
+			delete(s.clients, id)
+			log.Println("[TCP] Client ", id, " disconnected")
+			break
+		}
 	}
 }
 
@@ -87,5 +109,5 @@ func (s *TCPServer) Stop() {
 		conn.Close()
 	}
 	s.clients = make(map[string]net.Conn)
-	log.Println("TCP Server stopped")
+	log.Println("[TCP] Server stopped")
 }

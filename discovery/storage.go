@@ -138,9 +138,6 @@ func (ps *PeerStorage) Close() {
 
 // CleanupPeers removes peers that haven't been seen for a set duration
 func (ps *PeerStorage) CleanupPeers(expiryTime time.Duration) error {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-
 	return ps.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(peerBucket))
 		if bucket == nil {
