@@ -1,7 +1,7 @@
 package discovery
 
 import (
-	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -56,16 +56,23 @@ func (rt *routingTable) getAllPeers() map[string]string {
 }
 
 type PeerRouter struct {
-	listener     net.Listener
-	mu           sync.Mutex
-	routingTable *routingTable
+	listener      net.Listener
+	mu            sync.Mutex
+	routingTable  *routingTable
+	messageRouter *MessageRouter
 }
 
 // NewPeerRouter initializes the router.
-func NewPeerRouter() *PeerRouter {
+func NewPeerRouter(messageRouter *MessageRouter) *PeerRouter {
 	return &PeerRouter{
-		routingTable: newRoutingTable(),
+		routingTable:  newRoutingTable(),
+		messageRouter: messageRouter,
 	}
+}
+
+// GetAllPeers returns a copy of all registered peers.
+func (pr *PeerRouter) GetAllPeers() map[string]string {
+	return pr.routingTable.getAllPeers()
 }
 
 // RegisterPeer adds a peer to the routing system (exposed for users).
@@ -87,8 +94,8 @@ func (pr *PeerRouter) ResolvePeer(id string) (string, error) {
 	return address, nil
 }
 
-// BrodcastMessage sends a message to all available peers
-func (pr *PeerRouter) BrodcastMessage(data []byte) {
+// BroadcastMessage sends a message to all available peers
+func (pr *PeerRouter) BroadcastMessage(msg Message) {
 	peers := pr.routingTable.getAllPeers()
 
 	var wg sync.WaitGroup
@@ -96,7 +103,7 @@ func (pr *PeerRouter) BrodcastMessage(data []byte) {
 		wg.Add(1)
 		go func(id, addr string) {
 			defer wg.Done()
-			if err := pr.sendMessage(addr, data); err != nil {
+			if err := pr.sendMessage(addr, msg); err != nil {
 				log.Printf("[BRODCAST] Failed to send message to %s (%s): %v", id, addr, err)
 			}
 		}(id, addr)
@@ -105,23 +112,23 @@ func (pr *PeerRouter) BrodcastMessage(data []byte) {
 }
 
 // SendMessage sends a message to a specific peer
-func (pr *PeerRouter) SendMessage(peerId string, data []byte) error {
+func (pr *PeerRouter) SendMessage(peerId string, msg Message) error {
 	address, exists := pr.routingTable.getPeer(peerId)
 	if !exists {
 		return errors.New("peer not found in routing table")
 	}
-	return pr.sendMessage(address, data)
+	return pr.sendMessage(address, msg)
 }
 
-func (pr *PeerRouter) sendMessage(address string, data []byte) error {
+func (pr *PeerRouter) sendMessage(address string, msg Message) error {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	_, err = conn.Write(data)
-	return err
+	encoder := json.NewEncoder(conn)
+	return encoder.Encode(msg)
 }
 
 // StartListener starts a TCP server to listen for incoming messages
@@ -130,7 +137,7 @@ func (pr *PeerRouter) StartListener(port int) error {
 	defer pr.mu.Unlock()
 
 	if pr.listener != nil {
-		return errors.New("listener aready running")
+		return errors.New("listener already running")
 	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
@@ -159,15 +166,51 @@ func (pr *PeerRouter) acceptConnections() {
 func (pr *PeerRouter) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	reader := bufio.NewReader(conn)
+	decoder := json.NewDecoder(conn)
 	for {
-		message, err := reader.ReadBytes('\n') // read until new line
-		if err != nil {
-			log.Println("[PeerRouter] Error reading message: ", err)
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			log.Println("[PeerRouter] Failed to decode message: ", err)
 			return
 		}
+		log.Printf("[PeerRouter] Received message from %s: %+v", msg.SenderId, msg)
 
-		log.Printf("[PeerRouter] Received message: %s", message)
+		if response := pr.routeMessage(msg); response != nil {
+			encoder := json.NewEncoder(conn)
+			encoder.Encode(response)
+		}
+	}
+}
+
+// routeMessage processes incoming messages and determines weather it has to be routed or not
+func (pr *PeerRouter) routeMessage(msg Message) *Message {
+	// if the message has a specific receiver, proceed to route it to said receiver
+	if msg.ReceiverId != "" {
+		if err := pr.SendMessage(msg.ReceiverId, msg); err != nil {
+			log.Printf("[PeerRouter] Failed to forward message to %s: %v\n", msg.ReceiverId, err)
+			return &Message{
+				Type:       "ERROR",
+				SenderId:   "server",
+				ReceiverId: msg.SenderId,
+				Payload:    []byte(fmt.Sprintf("Failed to deliver message: %v", err)),
+				IsBinary:   false,
+			}
+		}
+		return nil
+	}
+
+	if pr.messageRouter != nil {
+		response := pr.messageRouter.HandleMessage(msg.SenderId, msg)
+		return &response
+	}
+
+	// Error if no router available
+	return &Message{
+		Type:       "ERROR",
+		SenderId:   "server",
+		ReceiverId: msg.SenderId,
+		Payload:    []byte("No routing handler available."),
+		IsBinary:   false,
 	}
 }
 
@@ -186,11 +229,11 @@ func (pr *PeerRouter) StopListener() error {
 }
 
 // MessageHandler defines the function signature for processing messages
-type MessageHandler func(peerId, message string) string
+type MessageHandler func(peerId string, msg Message) Message
 
 // MessageRouter manages built-in and custom message handlers
 type MessageRouter struct {
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	handlers  map[string]MessageHandler
 	peerStore *PeerStore
 }
@@ -201,25 +244,26 @@ func NewMessageHandler(peerStore *PeerStore) *MessageRouter {
 		handlers:  make(map[string]MessageHandler),
 		peerStore: peerStore,
 	}
-	router.RegisterHandler("PING", func(peerId, msg string) string {
-		return "PONG"
+
+	router.RegisterHandler("PING", func(peerId string, msg Message) Message {
+		return NewMessage("PONG", "server", peerId, nil, msg.IsBinary)
 	})
 
-	router.RegisterHandler("ECHO", func(peerId, msg string) string {
-		return msg
+	router.RegisterHandler("ECHO", func(peerId string, msg Message) Message {
+		return NewMessage("ECHO", "server", peerId, msg.Payload, msg.IsBinary)
 	})
 
-	router.RegisterHandler("PEER_LIST", func(peerId, msg string) string {
+	router.RegisterHandler("PEER_LIST", func(peerId string, msg Message) Message {
 		peers := router.peerStore.GetPeers()
 		if len(peers) == 0 {
-			return "No Active Peers..."
+			return NewMessage("PEER_LIST", "server", peerId, []byte("No Active Peers..."), msg.IsBinary)
 		}
 
 		var peerList []string
 		for _, p := range peers {
 			peerList = append(peerList, fmt.Sprintf("%s:%d", p.Address, p.Port))
 		}
-		return strings.Join(peerList, ", ")
+		return NewMessage("PEER_LIST", "server", peerId, []byte(strings.Join(peerList, ", ")), msg.IsBinary)
 	})
 
 	return router
@@ -233,19 +277,14 @@ func (mr *MessageRouter) RegisterHandler(command string, handler MessageHandler)
 }
 
 // HandleMessage processs an incoming message an returns a response
-func (mr *MessageRouter) HandleMessage(peerId, message string) string {
-	mr.mu.Lock()
-	defer mr.mu.Unlock()
+func (mr *MessageRouter) HandleMessage(peerId string, msg Message) Message {
+	mr.mu.RLock()
+	defer mr.mu.RUnlock()
 
-	parts := strings.Split(message, "|")
-	command := strings.ToUpper(parts[0])
-
-	if handler, exists := mr.handlers[command]; exists {
-		data := ""
-		if len(parts) > 1 {
-			data = parts[1]
-		}
-		return handler(peerId, data)
+	// Find the handler based on message type
+	if handler, exists := mr.handlers[strings.ToUpper(msg.Type)]; exists {
+		return handler(peerId, msg)
 	}
-	return fmt.Sprintf("ERROR: Unknown command '%s'", command)
+
+	return NewMessage("ERROR", "server", peerId, []byte(fmt.Sprintf("Unknown command '%s'", msg.Type)), false)
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // mDNSService handles peer discovery using mDNS
-type mDNSService struct {
+type MDNSService struct {
 	serviceName string
 	instance    *zeroconf.Server
 	resolver    *zeroconf.Resolver
@@ -24,14 +24,14 @@ type mDNSService struct {
 }
 
 // NewMDNSService creates a new mDNS service instance
-func NewMDNSService(serviceName string) *mDNSService {
-	return &mDNSService{
+func NewMDNSService(serviceName string) *MDNSService {
+	return &MDNSService{
 		serviceName: serviceName,
 	}
 }
 
 // Start registers current peer on the mDNS network
-func (m *mDNSService) Start(port int) error {
+func (m *MDNSService) Start(port int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -63,7 +63,7 @@ func (m *mDNSService) Start(port int) error {
 }
 
 // Stop shuts down the mDNS service
-func (m *mDNSService) Stop() {
+func (m *MDNSService) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -77,7 +77,7 @@ func (m *mDNSService) Stop() {
 }
 
 // StopDiscovery stops the ongoing peer discovery
-func (m *mDNSService) StopDiscovery() {
+func (m *MDNSService) StopDiscovery() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -102,7 +102,7 @@ func (m *mDNSService) StopDiscovery() {
 }
 
 // PauseDiscovery pauses peer discovery without closing channels
-func (m *mDNSService) PauseDiscovery() {
+func (m *MDNSService) PauseDiscovery() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -118,7 +118,7 @@ func (m *mDNSService) PauseDiscovery() {
 	log.Println("[mDNS] Discovery paused")
 }
 
-func (m *mDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
+func (m *MDNSService) StartDiscover(foundPeer func(ip string, port int)) error {
 	m.mu.Lock()
 
 	if m.running {

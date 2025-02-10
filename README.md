@@ -2,7 +2,7 @@
 
 GoSwarm is a **lightweight and modular P2P mesh networking library** written in **Go**, designed to enable **direct device-to-device communication** without relying on a central server. The library provides **peer discovery, persistence, and TCP-based communication**, allowing developers to build custom distributed applications.
 
-## Features
+## Features Provided
 
 ✅ **Peer Discovery**  
 - Uses **mDNS (Multicast DNS)** for decentralized peer discovery.  
